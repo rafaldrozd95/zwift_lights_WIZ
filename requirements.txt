@@ -1,0 +1,3 @@
+protobuf==3.19.1
+pywizlight==0.4.16
+scapy==2.4.5
