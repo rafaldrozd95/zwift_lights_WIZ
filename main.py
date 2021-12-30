@@ -8,12 +8,15 @@ import configparser
 import threading
 
 
+
 config = configparser.ConfigParser()
 
 config.read('config.ini')
 message = messages_pb2.ClientToServer()
-powerBuff = [0] * 15
-max_power = int(config["data"]["max_power"])
+
+cfg = {s:dict(config.items(s)) for s in config.sections()}
+
+
 
 def get_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -47,29 +50,23 @@ def light_manipulation(params):
         threads[k].join()
 
 
-def rgb(minimum, maximum, value):
-    if value > maximum:
-        return 255, 0, 0
-    ratio = 2 * (value-minimum) / (maximum - minimum)
-    b = int(max(0, 255*(1 - ratio)))
-    r = int(max(0, 255*(ratio - 1)))
-    g = 255 - b - r
-    return r, g, b
-
-
 def handler(packet):
-    global powerBuff
     data = packet.load.hex()
     offset = int(data[0:2], 16)
     data = data[2*(offset-1):-8]
     data = bytearray.fromhex(data)
     message.ParseFromString(data)
-    powerBuff.pop(0)
     power = message.state.power
-    powerBuff.append(power)
-    power = int(sum(powerBuff)/15)
-    r, g, b = rgb(0, max_power, power)
-    light_manipulation({"r":r,"g":g,"b":b,"dimming":95})
+    for zone in cfg:
+        power_from = int(cfg[zone]["power_from"])
+        power_to = int(cfg[zone]["power_to"])
+        dimming = int(cfg[zone]["dimming"])
+        if power >= power_from and power < power_to:
+            r = int(cfg[zone]["r"])
+            g = int(cfg[zone]["g"])
+            b = int(cfg[zone]["b"])
+            light_manipulation({"r":r,"g":g,"b":b,"dimming":dimming})
+            break
 
 
 async def find_bulb():
