@@ -6,15 +6,46 @@ import asyncio
 from pywizlight import discovery
 import configparser
 import threading
+import  signal
+from datetime import timedelta
+from random import randint
 
 
+WAIT_TIME_SECONDS_LED = 0.5
+led_ip = []
+power_buff = 6 * [0]
+class ProgramKilled(Exception):
+    pass
+
+def signal_handler(signum, frame):
+    raise ProgramKilled
+
+class Job(threading.Thread):
+    def __init__(self, interval, execute, *args, **kwargs):
+        threading.Thread.__init__(self)
+        self.daemon = False
+        self.stopped = threading.Event()
+        self.interval = interval
+        self.execute = execute
+        self.args = args
+        self.kwargs = kwargs
+        
+    def stop(self):
+                self.stopped.set()
+                self.join()
+    def run(self):
+            while not self.stopped.wait(self.interval.total_seconds()):
+                self.execute(*self.args, **self.kwargs)
 
 config = configparser.ConfigParser()
 
 config.read('config.ini')
 message = messages_pb2.ClientToServer()
 
-cfg = {s:dict(config.items(s)) for s in config.sections()}
+power_mode = dict(config.items('MODE'))
+power_mode = power_mode['power_mode']
+
+cfg = {s:dict(config.items(s)) for s in config.sections()[1:]}
 
 
 
@@ -50,24 +81,36 @@ def light_manipulation(params):
         threads[k].join()
 
 
-def handler(packet):
-    data = packet.load.hex()
-    offset = int(data[0:2], 16)
-    data = data[2*(offset-1):-8]
-    data = bytearray.fromhex(data)
-    message.ParseFromString(data)
-    power = message.state.power
+def bulb_handler():
     for zone in cfg:
         power_from = int(cfg[zone]["power_from"])
         power_to = int(cfg[zone]["power_to"])
         dimming = int(cfg[zone]["dimming"])
-        if power >= power_from and power < power_to:
+        if power[0] >= power_from and power[0] < power_to:
             r = int(cfg[zone]["r"])
             g = int(cfg[zone]["g"])
             b = int(cfg[zone]["b"])
             light_manipulation({"r":r,"g":g,"b":b,"dimming":dimming})
             break
 
+def handler(packet):
+    data = packet.load.hex()
+    offset = int(data[0:2], 16)
+    data = data[2*(offset-1):-8]
+    data = bytearray.fromhex(data)
+    message.ParseFromString(data)
+    power[0] = message.state.power
+
+def handler_avg(packet):
+    data = packet.load.hex()
+    offset = int(data[0:2], 16)
+    data = data[2*(offset-1):-8]
+    data = bytearray.fromhex(data)
+    message.ParseFromString(data)
+    power_buff.pop(0)
+    power[0] = message.state.power
+    power_buff.append(power[0])
+    power[0] = int(sum(power_buff)/6)
 
 async def find_bulb():
     ip_area = get_ip().split('.')
@@ -81,7 +124,11 @@ async def find_bulb():
     return a
     
 if __name__ == '__main__':
-    global led_ip
+    power = [0]
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    bulb_job = Job(interval=timedelta(seconds=WAIT_TIME_SECONDS_LED), execute=bulb_handler)
+    bulb_job.start()
     loop = asyncio.get_event_loop()
     print("Searching for WIZ bulbs...")
     led_ip = loop.run_until_complete(find_bulb())
@@ -94,7 +141,7 @@ if __name__ == '__main__':
         if not led_ip:
             break
         a = []
-        sniff(filter=f"ip src host {get_ip()} and dst port 3022", prn=handler, count=1)
+        sniff(filter=f"ip src host {get_ip()} and dst port 3022", prn=handler if power_mode == 'now' else handler_avg, count=1)
     
     
 
