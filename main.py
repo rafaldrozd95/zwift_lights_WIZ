@@ -7,11 +7,10 @@ from pywizlight import discovery
 import configparser
 import threading
 import  signal
-from datetime import timedelta
-from random import randint
-
-
-WAIT_TIME_SECONDS_LED = 0.5
+from datetime import datetime, time, timedelta
+import time
+ 
+SNIFF_INTERVAL = 0.5
 led_ip = []
 power_buff = 6 * [0]
 class ProgramKilled(Exception):
@@ -45,7 +44,10 @@ message = messages_pb2.ClientToServer()
 power_mode = dict(config.items('MODE'))
 power_mode = power_mode['power_mode']
 
-cfg = {s:dict(config.items(s)) for s in config.sections()[1:]}
+second_ip = dict(config.items('IP'))
+second_ip = second_ip['led_ip']
+
+cfg = {s:dict(config.items(s)) for s in config.sections()[2:]}
 
 
 
@@ -73,7 +75,7 @@ def light_manipulation(params):
     threads = []
     for i in range(len(led_ip)):   
         t = threading.Thread(target=send_data_udp, args=(params, led_ip[i]))
-        t.daemon = True
+        t.daemon = False
         threads.append(t)
     for j in range(len(led_ip)):
         threads[j].start()
@@ -81,25 +83,28 @@ def light_manipulation(params):
         threads[k].join()
 
 
-def bulb_handler():
+def bulb_handler(power):
     for zone in cfg:
         power_from = int(cfg[zone]["power_from"])
         power_to = int(cfg[zone]["power_to"])
         dimming = int(cfg[zone]["dimming"])
-        if power[0] >= power_from and power[0] < power_to:
+        if power >= power_from and power < power_to:
             r = int(cfg[zone]["r"])
             g = int(cfg[zone]["g"])
             b = int(cfg[zone]["b"])
             light_manipulation({"r":r,"g":g,"b":b,"dimming":dimming})
             break
-
 def handler(packet):
+    global timson
+    timson = datetime.now()
     data = packet.load.hex()
     offset = int(data[0:2], 16)
     data = data[2*(offset-1):-8]
     data = bytearray.fromhex(data)
     message.ParseFromString(data)
-    power[0] = message.state.power
+    power = message.state.power
+    bulb_handler(power)
+    
 
 def handler_avg(packet):
     data = packet.load.hex()
@@ -108,9 +113,11 @@ def handler_avg(packet):
     data = bytearray.fromhex(data)
     message.ParseFromString(data)
     power_buff.pop(0)
-    power[0] = message.state.power
-    power_buff.append(power[0])
-    power[0] = int(sum(power_buff)/6)
+    power = message.state.power
+    power_buff.append(power)
+    power = int(sum(power_buff)/6)
+    bulb_handler(power)
+
 
 async def find_bulb():
     ip_area = get_ip().split('.')
@@ -123,26 +130,38 @@ async def find_bulb():
         a.append((bulb.__dict__["ip"]))
     return a
     
+delta = 0
+
+def sniff_handler():
+    sniff(filter=f"dst port 3022", prn=handler if power_mode == 'now' else handler_avg, count=1)
+
+
 if __name__ == '__main__':
-    power = [0]
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
-    bulb_job = Job(interval=timedelta(seconds=WAIT_TIME_SECONDS_LED), execute=bulb_handler)
-    bulb_job.start()
     loop = asyncio.get_event_loop()
+    sniff_job = Job(interval=timedelta(seconds=SNIFF_INTERVAL), execute=sniff_handler)
+    sniff_job.start()
     print("Searching for WIZ bulbs...")
     led_ip = loop.run_until_complete(find_bulb())
     if not led_ip:
-        print("No bulbs found...")
+        led_ip = [second_ip]
+        print("No bulbs found... Using config ip")
     else:
         print(f"Found {len(led_ip)} bulbs...")
         print(f"Running App...")
     while True:
-        if not led_ip:
+        try:
+            if not led_ip:
+                break
+            a = []
+            
+        except ProgramKilled:
+            sniff_job.stop()
+            print("Pogram killed, doing cleaning things...")
             break
-        a = []
-        sniff(filter=f"ip src host {get_ip()} and dst port 3022", prn=handler if power_mode == 'now' else handler_avg, count=1)
-    
+
+
     
 
 
