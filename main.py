@@ -9,7 +9,7 @@ import threading
 import  signal
 from datetime import datetime, time, timedelta
 import time
- #basic functionality of the code
+ #basic functionality of the code hjade twoium starym na kibel
 SNIFF_INTERVAL = 0.5
 led_ip = []
 power_buff = 6 * [0]
