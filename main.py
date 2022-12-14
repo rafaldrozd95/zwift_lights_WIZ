@@ -9,7 +9,7 @@ import threading
 import  signal
 from datetime import datetime, time, timedelta
 import time
- #here is 842 change
+ #here is some hange
 SNIFF_INTERVAL = 0.5
 led_ip = []
 power_buff = 6 * [0]
